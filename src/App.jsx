@@ -13,7 +13,7 @@ function App() {
     try { return JSON.parse(localStorage.getItem('myLiabilities')) || []; } catch(e) { return []; }
   });
   const [history, setHistory] = useState([]);
-  const [exchangeRate, setExchangeRate] = useState(32);
+  const [exchangeRate, setExchangeRate] = useState(32.);
   const [loading, setLoading] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [range, setRange] = useState('全部');
@@ -21,15 +21,15 @@ function App() {
   const [showTW, setShowTW] = useState(true);
   const [showDebt, setShowDebt] = useState(true);
   const [todayMode, setTodayMode] = useState('val'); 
-  const [priceMode, setPriceMode] = useState('total'); // 'total' (現值) 或 'unit' (現價)
+  const [priceMode, setPriceMode] = useState('unit'); // 優先顯示 'unit' (現價)
 
-  // 匯率抓取邏輯 (維持防錯範圍 28~38)
+  // 匯率抓取邏輯 (維持防錯範圍 28~35)
   const fetchRateFromCloud = useCallback(async () => {
     try {
       const res = await fetch(`${CALC_CSV_URL}&t=${Date.now()}`);
       const text = await res.text();
       const matches = text.match(/\d{2}\.\d+/g) || [];
-      const validRates = matches.map(Number).filter(n => n >= 28 && n <= 35);
+      const validRates = matches.map(Number).filter(n => n >= 28 && n <= 32);
       if (validRates.length > 0) setExchangeRate(validRates[0]);
     } catch (e) { console.error(e); }
   }, [CALC_CSV_URL]);
@@ -286,7 +286,7 @@ function AssetTable({ list, calc, getValColor, todayMode, setTodayMode, priceMod
               style={{ padding: '12px 15px', textDecoration: 'underline dotted', cursor: 'pointer' }}
               onClick={() => setPriceMode(priceMode === 'total' ? 'unit' : 'total')}
             >
-              {priceMode === 'total' ? '現值 (TWD)' : '現價 (原幣)'}
+              {priceMode === 'unit' ? '現價' : '現值 (TWD)'}
             </th>
             <th style={{ padding: '12px 15px', textDecoration: 'underline dotted', cursor: 'pointer' }} onClick={() => setTodayMode(todayMode === 'val' ? 'pct' : 'val')}>今日變動</th>
             <th style={{ padding: '12px 15px' }}>累積損益</th>
@@ -299,9 +299,9 @@ function AssetTable({ list, calc, getValColor, todayMode, setTodayMode, priceMod
               <tr key={item.id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
                 <td style={{ padding: '12px 15px' }}><div style={{ fontWeight: 'bold' }}>{item.symbol}</div><div style={{ fontSize: '11px', color: '#94a3b8' }}>{item.shares.toLocaleString()}</div></td>
                 <td style={{ padding: '12px 15px', fontWeight: '600' }}>
-                  {priceMode === 'total' 
-                    ? Math.round(d.mv).toLocaleString() 
-                    : `${d.isUS ? '$' : ''}${d.unitPrice.toLocaleString()}`}
+                  {priceMode === 'unit' 
+                    ? `${d.isUS ? '$' : ''}${d.unitPrice.toLocaleString()}`
+                    : Math.round(d.mv).toLocaleString()}
                 </td>
                 <td style={{ padding: '12px 15px', color: getValColor(d.today), fontWeight: 'bold' }}>
                   {todayMode === 'val' ? (d.today >= 0 ? '+' : '') + Math.round(d.today).toLocaleString() : (d.todayPct >= 0 ? '+' : '') + d.todayPct.toFixed(2) + '%'}
