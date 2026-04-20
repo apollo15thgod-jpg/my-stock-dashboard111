@@ -22,7 +22,7 @@ function App() {
   const [todayMode, setTodayMode] = useState('val'); 
   const [priceMode, setPriceMode] = useState('unit');
 
-  // 1. 抓取雲端數據
+  // --- 核心邏輯：抓取匯率與歷史 ---
   const fetchRateFromCloud = useCallback(async () => {
     try {
       const res = await fetch(`${CALC_CSV_URL}&t=${Date.now()}`);
@@ -47,11 +47,9 @@ function App() {
     } catch (e) { console.error(e); }
   }, [HISTORY_CSV_URL]);
 
-  useEffect(() => { fetchHistoryFromCloud(); fetchRateFromCloud(); }, [fetchHistoryFromCloud, fetchRateFromCloud]);
-  useEffect(() => { localStorage.setItem('myAssets', JSON.stringify(assets)); }, [assets]);
-  useEffect(() => { localStorage.setItem('myLiabilities', JSON.stringify(liabilities)); }, [liabilities]);
-
-  const refreshPrices = async () => {
+  // --- 重整價格函數 ---
+  const refreshPrices = useCallback(async () => {
+    if (loading) return;
     setLoading(true);
     try {
       await fetchRateFromCloud();
@@ -59,6 +57,7 @@ function App() {
       const csvText = await csvRes.text();
       const allNumbers = csvText.match(/\d+(\.\d+)?/g) || [];
       const backupPrice = parseFloat(allNumbers.find(n => parseFloat(n) > 5)) || 0;
+      
       const updated = await Promise.all(assets.map(async (item) => {
         if (!item.symbol) return item;
         try {
@@ -71,9 +70,27 @@ function App() {
       }));
       setAssets(updated);
       await fetchHistoryFromCloud();
-    } catch (e) {} finally { setLoading(false); }
-  };
+    } catch (e) {
+      console.error("更新失敗", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [assets, loading, fetchRateFromCloud, fetchHistoryFromCloud, PRICE_CSV_URL, API_KEY]);
 
+  // --- 自動定時器：每 10 秒自動更新一次 ---
+  useEffect(() => {
+    const autoTimer = setInterval(() => {
+      refreshPrices();
+    }, 10000); // 10000ms = 10s
+    return () => clearInterval(autoTimer);
+  }, [refreshPrices]);
+
+  // --- 初始化與存儲 ---
+  useEffect(() => { fetchHistoryFromCloud(); fetchRateFromCloud(); }, [fetchHistoryFromCloud, fetchRateFromCloud]);
+  useEffect(() => { localStorage.setItem('myAssets', JSON.stringify(assets)); }, [assets]);
+  useEffect(() => { localStorage.setItem('myLiabilities', JSON.stringify(liabilities)); }, [liabilities]);
+
+  // --- 計算邏輯 ---
   const calculateAsset = (item) => {
     const isUS = !/^\d/.test(item.symbol);
     const m = isUS ? exchangeRate : 1;
@@ -104,7 +121,7 @@ function App() {
     percent: (usTotal.cost + twTotal.cost) > 0 ? ((usTotal.total + twTotal.total) / (usTotal.cost + twTotal.cost)) * 100 : 0
   };
 
-  // 2. 圖表計算：顯示全部歷史，Y軸1萬格，X軸一天一格
+  // --- 圖表計算 ---
   const chartData = useMemo(() => {
     if (!history || history.length < 2) return null;
     const vals = history.map(d => d.val);
@@ -126,13 +143,16 @@ function App() {
   return (
     <div style={{ padding: '12px', fontFamily: '-apple-system, system-ui, sans-serif', maxWidth: '1000px', margin: '0 auto', minHeight: '100vh', backgroundImage: `linear-gradient(rgba(240, 242, 245, 0.75), rgba(240, 242, 245, 0.75)), url('https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?q=80&w=2067&auto=format&fit=crop')`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed', boxSizing: 'border-box' }}>
       
-      {/* 頂部操作 */}
+      {/* 頂部操作按鈕 */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '12px' }}>
-        <button onClick={refreshPrices} disabled={loading} style={{ flex: 1, maxWidth: '120px', padding: '12px 0', background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(5px)', border: '1px solid #cbd5e1', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px' }}>
-          {loading ? '⚡' : '🔄 更新'}
+        <button onClick={refreshPrices} disabled={loading} style={{ flex: 1, maxWidth: '120px', padding: '12px 0', background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(5px)', border: '1px solid #cbd5e1', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', position: 'relative' }}>
+          {loading ? '⚡ 更新中' : '🔄 自動更新中'}
+          {!loading && <span style={{ position:'absolute', top: '6px', right: '10px', width: '6px', height: '6px', background: '#22c55e', borderRadius: '50%', animation: 'pulse 1.5s infinite' }}></span>}
         </button>
         <button onClick={() => setShowAdmin(!showAdmin)} style={{ flex: 1, maxWidth: '120px', padding: '12px 0', background: '#1e293b', color: '#fff', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px' }}>⚙️ 設定</button>
       </div>
+
+      <style>{`@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }`}</style>
 
       {/* 總覽卡片 */}
       <div style={{ background: 'rgba(30, 41, 59, 0.95)', backdropFilter: 'blur(10px)', color: '#fff', padding: '25px', borderRadius: '24px', marginBottom: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}>
@@ -157,7 +177,7 @@ function App() {
         </div>
       </div>
 
-      {/* 歷史資產趨勢：優化字體與格線 */}
+      {/* 歷史資產趨勢 */}
       <div style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(10px)', padding: '20px 16px', borderRadius: '24px', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.3)' }}>
         <div style={{ marginBottom: '16px' }}>
           <b style={{ fontSize: '16px', color: '#1e293b' }}>📊 歷史資產趨勢 (Y: 1萬/格)</b>
@@ -177,7 +197,6 @@ function App() {
                     fill="#94a3b8" 
                     dominantBaseline="middle" 
                     textAnchor="end"
-                    letterSpacing="0.1"
                   >
                     {tick / 10000}萬
                   </text>
@@ -189,7 +208,7 @@ function App() {
         </div>
       </div>
 
-      {/* 資產區塊 */}
+      {/* 資產清單 */}
       <MobileSection title="🇺🇸 美股資產" total={usTotal} show={showUS} setShow={setShowUS}>
         <AssetTable list={usAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
@@ -198,7 +217,7 @@ function App() {
         <AssetTable list={twAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
 
-      {/* 負債區塊 */}
+      {/* 負債項目 */}
       <div style={{ marginBottom: '40px' }}>
         <div onClick={() => setShowDebt(!showDebt)} style={{ background: 'rgba(255,255,255,0.8)', padding: '18px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', alignItems:'center', borderLeft: '6px solid #94a3b8' }}>
           <b style={{ fontSize: '16px' }}>💸 負債紀錄 {showDebt ? '▲' : '▼'}</b>
@@ -216,7 +235,7 @@ function App() {
         )}
       </div>
 
-      {/* 設定 Modal */}
+      {/* 設定彈窗 */}
       {showAdmin && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
           <div style={{ background: '#fff', padding: '24px', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', width: '100%', maxHeight: '85vh', overflowY: 'auto', boxSizing: 'border-box' }}>
@@ -248,6 +267,7 @@ function App() {
   );
 }
 
+// 子組件：區塊摺疊
 function MobileSection({ title, total, show, setShow, children }) {
   return (
     <div style={{ marginBottom: '12px' }}>
@@ -263,6 +283,7 @@ function MobileSection({ title, total, show, setShow, children }) {
   );
 }
 
+// 子組件：資產表格
 function AssetTable({ list, calc, getValColor, todayMode, setTodayMode, priceMode, setPriceMode }) {
   return (
     <div style={{ overflowX: 'auto', background: 'rgba(255,255,255,0.9)', marginTop: '6px', borderRadius: '18px' }}>
