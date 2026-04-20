@@ -21,14 +21,14 @@ function App() {
   const [showTW, setShowTW] = useState(true);
   const [showDebt, setShowDebt] = useState(true);
   const [todayMode, setTodayMode] = useState('val'); 
+  const [priceMode, setPriceMode] = useState('total'); // 'total' (現值) 或 'unit' (現價)
 
-  // 修正後的匯率抓取邏輯
+  // 匯率抓取邏輯 (維持防錯範圍 28~38)
   const fetchRateFromCloud = useCallback(async () => {
     try {
       const res = await fetch(`${CALC_CSV_URL}&t=${Date.now()}`);
       const text = await res.text();
       const matches = text.match(/\d{2}\.\d+/g) || [];
-      // 這裡排除掉像 50.58 這種不合理的數字
       const validRates = matches.map(Number).filter(n => n >= 28 && n <= 35);
       if (validRates.length > 0) setExchangeRate(validRates[0]);
     } catch (e) { console.error(e); }
@@ -85,7 +85,7 @@ function App() {
     const todayPct = prevMv > 0 ? (todayLoss / prevMv) * 100 : 0;
     const totalLoss = mv - costTWD;
     const totalPct = costTWD > 0 ? (totalLoss / costTWD) * 100 : 0;
-    return { isUS, mv, today: todayLoss, todayPct, total: totalLoss, totalPct };
+    return { isUS, mv, today: todayLoss, todayPct, total: totalLoss, totalPct, unitPrice: item.price || 0 };
   };
 
   const usAssets = assets.filter(a => !/^\d/.test(a.symbol));
@@ -200,11 +200,11 @@ function App() {
 
       {/* 資產區塊 */}
       <MobileSection title="🇺🇸 美股資產" total={usTotal} show={showUS} setShow={setShowUS}>
-        <AssetTable list={usAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} />
+        <AssetTable list={usAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
 
       <MobileSection title="🇹🇼 台股資產" total={twTotal} show={showTW} setShow={setShowTW}>
-        <AssetTable list={twAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} />
+        <AssetTable list={twAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
 
       {/* 負債區塊 */}
@@ -275,14 +275,19 @@ function MobileSection({ title, total, show, setShow, children }) {
   );
 }
 
-function AssetTable({ list, calc, getValColor, todayMode, setTodayMode }) {
+function AssetTable({ list, calc, getValColor, todayMode, setTodayMode, priceMode, setPriceMode }) {
   return (
     <div style={{ overflowX: 'auto', background: 'rgba(255,255,255,0.9)', marginTop: '6px', borderRadius: '18px' }}>
       <table style={{ width: '100%', minWidth: '380px', borderCollapse: 'collapse', fontSize: '14px' }}>
         <thead style={{ background: 'rgba(0,0,0,0.03)' }}>
           <tr style={{ textAlign: 'left', color: '#64748b' }}>
             <th style={{ padding: '12px 15px' }}>資產/股數</th>
-            <th style={{ padding: '12px 15px' }}>現值</th>
+            <th 
+              style={{ padding: '12px 15px', textDecoration: 'underline dotted', cursor: 'pointer' }}
+              onClick={() => setPriceMode(priceMode === 'total' ? 'unit' : 'total')}
+            >
+              {priceMode === 'total' ? '現值 (TWD)' : '現價 (原幣)'}
+            </th>
             <th style={{ padding: '12px 15px', textDecoration: 'underline dotted', cursor: 'pointer' }} onClick={() => setTodayMode(todayMode === 'val' ? 'pct' : 'val')}>今日變動</th>
             <th style={{ padding: '12px 15px' }}>累積損益</th>
           </tr>
@@ -293,7 +298,11 @@ function AssetTable({ list, calc, getValColor, todayMode, setTodayMode }) {
             return (
               <tr key={item.id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
                 <td style={{ padding: '12px 15px' }}><div style={{ fontWeight: 'bold' }}>{item.symbol}</div><div style={{ fontSize: '11px', color: '#94a3b8' }}>{item.shares.toLocaleString()}</div></td>
-                <td style={{ padding: '12px 15px' }}>{Math.round(d.mv).toLocaleString()}</td>
+                <td style={{ padding: '12px 15px', fontWeight: '600' }}>
+                  {priceMode === 'total' 
+                    ? Math.round(d.mv).toLocaleString() 
+                    : `${d.isUS ? '$' : ''}${d.unitPrice.toLocaleString()}`}
+                </td>
                 <td style={{ padding: '12px 15px', color: getValColor(d.today), fontWeight: 'bold' }}>
                   {todayMode === 'val' ? (d.today >= 0 ? '+' : '') + Math.round(d.today).toLocaleString() : (d.todayPct >= 0 ? '+' : '') + d.todayPct.toFixed(2) + '%'}
                 </td>
