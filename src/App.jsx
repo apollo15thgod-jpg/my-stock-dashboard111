@@ -182,7 +182,7 @@ function App() {
 
       {/* 歷史趨勢圖 */}
       <div style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(10px)', padding: '20px 16px', borderRadius: '24px', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.3)' }}>
-        <b style={{ fontSize: '16px', color: '#1e293b', display:'block', marginBottom:'16px' }}>📊 歷史資產趨勢 (Y: 1萬/格)</b>
+        <b style={{ fontSize: '16px', color: '#1e293b', display:'block', marginBottom:'16px' }}>📊 歷史資產趨勢 </b>
         <div style={{ height: '180px', width: '100%', position: 'relative', paddingLeft: '45px', boxSizing: 'border-box' }}>
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
             {chartData?.yTicks.map(tick => {
