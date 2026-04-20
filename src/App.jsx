@@ -13,7 +13,7 @@ function App() {
     try { return JSON.parse(localStorage.getItem('myLiabilities')) || []; } catch(e) { return []; }
   });
   const [history, setHistory] = useState([]);
-  const [exchangeRate, setExchangeRate] = useState(32.5);
+  const [exchangeRate, setExchangeRate] = useState(32);
   const [loading, setLoading] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [range, setRange] = useState('全部');
@@ -29,7 +29,7 @@ function App() {
       const text = await res.text();
       const matches = text.match(/\d{2}\.\d+/g) || [];
       // 這裡排除掉像 50.58 這種不合理的數字
-      const validRates = matches.map(Number).filter(n => n >= 28 && n <= 38);
+      const validRates = matches.map(Number).filter(n => n >= 28 && n <= 35);
       if (validRates.length > 0) setExchangeRate(validRates[0]);
     } catch (e) { console.error(e); }
   }, [CALC_CSV_URL]);
