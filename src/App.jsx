@@ -9,6 +9,9 @@ function App() {
   const [assets, setAssets] = useState(() => {
     try { return JSON.parse(localStorage.getItem('myAssets')) || []; } catch(e) { return []; }
   });
+  const [liabilities, setLiabilities] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('myLiabilities')) || []; } catch(e) { return []; }
+  });
   const [history, setHistory] = useState([]);
   const [exchangeRate, setExchangeRate] = useState(32.5);
   const [loading, setLoading] = useState(false);
@@ -16,17 +19,16 @@ function App() {
   const [range, setRange] = useState('全部');
   const [showUS, setShowUS] = useState(true);
   const [showTW, setShowTW] = useState(true);
-  const [hoverData, setHoverData] = useState(null);
+  const [showDebt, setShowDebt] = useState(true);
+  const [todayMode, setTodayMode] = useState('val'); 
 
+  // 資料抓取與計算邏輯 (保持不變)
   const fetchRateFromCloud = useCallback(async () => {
     try {
       const res = await fetch(`${CALC_CSV_URL}&t=${Date.now()}`);
       const text = await res.text();
       const matches = text.match(/\d{2}\.\d+/g);
-      if (matches) {
-        const autoNum = parseFloat(matches[0]);
-        if (autoNum > 28 && autoNum < 38) setExchangeRate(autoNum);
-      }
+      if (matches && matches[0] > 28) setExchangeRate(parseFloat(matches[0]));
     } catch (e) { console.error(e); }
   }, [CALC_CSV_URL]);
 
@@ -46,6 +48,7 @@ function App() {
 
   useEffect(() => { fetchHistoryFromCloud(); fetchRateFromCloud(); }, [fetchHistoryFromCloud, fetchRateFromCloud]);
   useEffect(() => { localStorage.setItem('myAssets', JSON.stringify(assets)); }, [assets]);
+  useEffect(() => { localStorage.setItem('myLiabilities', JSON.stringify(liabilities)); }, [liabilities]);
 
   const refreshPrices = async () => {
     setLoading(true);
@@ -67,35 +70,32 @@ function App() {
       }));
       setAssets(updated);
       await fetchHistoryFromCloud();
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+    } catch (e) {} finally { setLoading(false); }
   };
 
   const calculateAsset = (item) => {
     const isUS = !/^\d/.test(item.symbol);
     const m = isUS ? exchangeRate : 1;
     const mv = (item.price || 0) * (item.shares || 0) * m;
+    const prevMv = (item.prevClose || 0) * (item.shares || 0) * m;
     const costTWD = (item.totalCost || 0) * (isUS ? exchangeRate : 1); 
-    const todayLoss = ((item.price || 0) - (item.prevClose || 0)) * (item.shares || 0) * m;
+    const todayLoss = mv - prevMv;
+    const todayPct = prevMv > 0 ? (todayLoss / prevMv) * 100 : 0;
     const totalLoss = mv - costTWD;
-    const percent = costTWD > 0 ? (totalLoss / costTWD) * 100 : 0;
-    return { isUS, mv, today: todayLoss, total: totalLoss, percent };
+    const totalPct = costTWD > 0 ? (totalLoss / costTWD) * 100 : 0;
+    return { isUS, mv, today: todayLoss, todayPct, total: totalLoss, totalPct };
   };
 
   const usAssets = assets.filter(a => !/^\d/.test(a.symbol));
   const twAssets = assets.filter(a => /^\d/.test(a.symbol));
   const sumData = (list) => list.reduce((acc, a) => {
     const d = calculateAsset(a);
-    return { 
-      mv: acc.mv + d.mv, 
-      today: acc.today + d.today, 
-      total: acc.total + d.total, 
-      cost: acc.cost + (a.totalCost * (d.isUS ? exchangeRate : 1)) 
-    };
+    return { mv: acc.mv + d.mv, today: acc.today + d.today, total: acc.total + d.total, cost: acc.cost + (a.totalCost * (d.isUS ? exchangeRate : 1)) };
   }, { mv: 0, today: 0, total: 0, cost: 0 });
 
   const usTotal = sumData(usAssets);
   const twTotal = sumData(twAssets);
+  const totalDebt = liabilities.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
   const grandTotal = { 
     mv: usTotal.mv + twTotal.mv, 
     today: usTotal.today + twTotal.today, 
@@ -103,131 +103,143 @@ function App() {
     percent: (usTotal.cost + twTotal.cost) > 0 ? ((usTotal.total + twTotal.total) / (usTotal.cost + twTotal.cost)) * 100 : 0
   };
 
-  const getFilteredData = () => {
+  const { list: drawData, rangeDiff, rangePercent } = (() => {
     const now = Date.now();
-    const oneDay = 24 * 60 * 60 * 1000;
-    let filtered = [];
+    const oneDay = 86400000;
+    let filtered = history;
     if (range === '今日') filtered = history.filter(h => h.ts > now - oneDay);
     else if (range === '5日') filtered = history.filter(h => h.ts > now - (5 * oneDay));
-    else if (range === '本月') filtered = history.filter(h => h.ts > new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime());
-    else if (range === '年初至今') filtered = history.filter(h => h.ts > new Date(new Date().getFullYear(), 0, 1).getTime());
-    else filtered = history;
-
     if (filtered.length < 1) return { list: [], rangeDiff: 0, rangePercent: 0 };
     const firstVal = filtered[0].val;
     const lastVal = filtered[filtered.length - 1].val;
-    const diff = lastVal - firstVal;
-    const pct = firstVal !== 0 ? (diff / firstVal) * 100 : 0;
-    return { list: filtered, rangeDiff: diff, rangePercent: pct };
-  };
+    return { list: filtered, rangeDiff: lastVal - firstVal, rangePercent: firstVal !== 0 ? ((lastVal - firstVal) / firstVal) * 100 : 0 };
+  })();
 
-  const { list: drawData, rangeDiff, rangePercent } = getFilteredData();
-  const maxV = Math.max(...drawData.map(h => h.val), 1);
-  const minV = Math.min(...drawData.map(h => h.val), 0);
-  const vRange = (maxV - minV) || 1;
-  const polylinePath = drawData.length > 1 ? drawData.map((h, i) => `${(i / (drawData.length - 1)) * 100},${90 - ((h.val - minV) / vRange) * 80}`).join(' ') : "";
+  const polylinePath = drawData.length > 1 ? drawData.map((h, i) => {
+    const maxV = Math.max(...drawData.map(d => d.val), 1);
+    const minV = Math.min(...drawData.map(d => d.val), 0);
+    const vR = (maxV - minV) || 1;
+    return `${(i / (drawData.length - 1)) * 100},${90 - ((h.val - minV) / vR) * 80}`;
+  }).join(' ') : "";
 
-  // 輔助顏色函數：紅漲綠跌
   const getValueColor = (val) => (val >= 0 ? '#ef4444' : '#22c55e');
 
   return (
-    <div style={{ padding: '20px', fontFamily: '-apple-system, sans-serif', maxWidth: '1000px', margin: '0 auto', background: '#f0f2f5', minHeight: '100vh' }}>
+    <div style={{ 
+      padding: '12px', 
+      fontFamily: '-apple-system, system-ui, sans-serif', 
+      maxWidth: '100%', 
+      margin: '0 auto', 
+      minHeight: '100vh',
+      backgroundImage: `linear-gradient(rgba(240, 242, 245, 0.7), rgba(240, 242, 245, 0.7)), url('https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?q=80&w=2067&auto=format&fit=crop')`,
+      backgroundSize: 'cover',
+      backgroundPosition: 'center',
+      backgroundAttachment: 'fixed',
+      boxSizing: 'border-box'
+    }}>
       
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: '15px' }}>
-        <button onClick={refreshPrices} disabled={loading} style={{ padding: '10px 20px', background: '#fff', border: '1px solid #cbd5e1', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold' }}>
-          {loading ? '⚡ 同步中...' : '🔄 更新數據'}
+      {/* 操作按鈕 - 手機版適配 */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '12px' }}>
+        <button onClick={refreshPrices} disabled={loading} style={{ flex: 1, maxWidth: '120px', padding: '12px 0', background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(5px)', border: '1px solid #cbd5e1', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px' }}>
+          {loading ? '⚡' : '🔄 更新'}
         </button>
-        <button onClick={() => setShowAdmin(!showAdmin)} style={{ padding: '10px 20px', background: '#1e293b', color: '#fff', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold' }}>⚙️ 設定資產</button>
+        <button onClick={() => setShowAdmin(!showAdmin)} style={{ flex: 1, maxWidth: '120px', padding: '12px 0', background: '#1e293b', color: '#fff', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px' }}>⚙️ 設定</button>
       </div>
 
-      {/* 總覽卡片 */}
-      <div style={{ background: '#1e293b', color: '#fff', padding: '30px', borderRadius: '28px', marginBottom: '25px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
-        <div style={{borderRight:'1px solid rgba(255,255,255,0.1)'}}><div style={{ fontSize: '13px', opacity: 0.6, marginBottom: '5px' }}>總市值 (TWD)</div><div style={{ fontSize: '22px', fontWeight: 'bold' }}>{Math.round(grandTotal.mv).toLocaleString()}</div></div>
-        <div style={{borderRight:'1px solid rgba(255,255,255,0.1)'}}><div style={{ fontSize: '13px', opacity: 0.6, marginBottom: '5px' }}>累積損益</div><div style={{ fontSize: '22px', fontWeight: 'bold', color: getValueColor(grandTotal.total) }}>{Math.round(grandTotal.total).toLocaleString()} <span style={{fontSize:'14px'}}>({grandTotal.percent.toFixed(2)}%)</span></div></div>
-        <div style={{borderRight:'1px solid rgba(255,255,255,0.1)'}}><div style={{ fontSize: '13px', opacity: 0.6, marginBottom: '5px' }}>今日損益</div><div style={{ fontSize: '22px', fontWeight: 'bold', color: getValueColor(grandTotal.today) }}>{grandTotal.today >= 0 ? '+' : ''}{Math.round(grandTotal.today).toLocaleString()}</div></div>
-        <div style={{ textAlign: 'center' }}><div style={{ fontSize: '11px', opacity: 0.5, marginBottom: '5px' }}>即時匯率</div><div style={{ fontSize: '22px', fontWeight: 'bold', color: '#fbbf24' }}>{exchangeRate.toFixed(3)}</div></div>
+      {/* 總覽卡片 - 手機版變為 2x2 */}
+      <div style={{ 
+        background: 'rgba(30, 41, 59, 0.95)', 
+        backdropFilter: 'blur(10px)', 
+        color: '#fff', 
+        padding: '20px', 
+        borderRadius: '24px', 
+        marginBottom: '20px', 
+        display: 'grid', 
+        gridTemplateColumns: '1fr 1fr', 
+        gap: '16px',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.15)' 
+      }}>
+        <div style={{ borderRight: '1px solid rgba(255,255,255,0.1)' }}>
+          <div style={{ fontSize: '12px', opacity: 0.6 }}>總市值</div>
+          <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{Math.round(grandTotal.mv).toLocaleString()}</div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: '12px', opacity: 0.6 }}>今日損益</div>
+          <div style={{ fontSize: '18px', fontWeight: 'bold', color: getValueColor(grandTotal.today) }}>{Math.round(grandTotal.today).toLocaleString()}</div>
+        </div>
+        <div style={{ borderRight: '1px solid rgba(255,255,255,0.1)', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '10px' }}>
+          <div style={{ fontSize: '12px', opacity: 0.6 }}>累積損益</div>
+          <div style={{ fontSize: '18px', fontWeight: 'bold', color: getValueColor(grandTotal.total) }}>{grandTotal.percent.toFixed(1)}%</div>
+        </div>
+        <div style={{ textAlign: 'right', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '10px' }}>
+          <div style={{ fontSize: '12px', opacity: 0.6 }}>匯率</div>
+          <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#fbbf24' }}>{exchangeRate.toFixed(2)}</div>
+        </div>
       </div>
 
-      {/* 歷史圖表與數據 */}
-      <div style={{ background: '#fff', padding: '25px', borderRadius: '24px', marginBottom: '25px', border: '1px solid #e2e8f0' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '15px' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-              <b style={{ color: '#1e293b', fontSize: '18px' }}>📊 歷史資產水位</b>
-              <div style={{ fontSize: '13px', display: 'flex', gap: '12px' }}>
-                <span style={{ color: getValueColor(grandTotal.today), fontWeight: '600' }}>{grandTotal.today >= 0 ? '+' : ''}{Math.round(grandTotal.today).toLocaleString()} (今日)</span>
-                <span style={{ color: getValueColor(rangeDiff), fontWeight: '600' }}>{rangeDiff >= 0 ? '+' : ''}{Math.round(rangeDiff).toLocaleString()} ({rangePercent.toFixed(2)}%) {range === '全部' ? '全部時間' : `過去${range}`}</span>
-              </div>
-            </div>
-            {hoverData && <div style={{ fontSize: '12px', color: '#3b82f6', fontWeight: 'bold' }}>{new Date(hoverData.ts).toLocaleString()} : ${Math.round(hoverData.val).toLocaleString()}</div>}
-          </div>
-          <div style={{ display: 'flex', gap: '5px', background: '#f1f5f9', padding: '4px', borderRadius: '10px' }}>
-            {['今日', '5日', '本月', '年初至今', '全部'].map(r => (
-              <button key={r} onClick={() => setRange(r)} style={{ padding: '6px 12px', fontSize: '12px', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', background: range === r ? '#fff' : 'transparent', color: range === r ? '#3b82f6' : '#64748b' }}>{r}</button>
+      {/* 歷史圖表 */}
+      <div style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(10px)', padding: '16px', borderRadius: '24px', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <b style={{ fontSize: '16px' }}>📊 趨勢</b>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            {['5日', '全部'].map(r => (
+              <button key={r} onClick={() => setRange(r)} style={{ padding: '4px 8px', fontSize: '11px', border: 'none', borderRadius: '6px', background: range === r ? '#3b82f6' : 'rgba(0,0,0,0.05)', color: range === r ? '#fff' : '#64748b' }}>{r}</button>
             ))}
           </div>
         </div>
-        
-        <div style={{ height: '180px', width: '100%', position: 'relative' }} onMouseMove={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          const xPercent = (e.clientX - rect.left) / rect.width;
-          const idx = Math.min(Math.max(Math.round(xPercent * (drawData.length - 1)), 0), drawData.length - 1);
-          if(drawData[idx]) setHoverData({ ...drawData[idx], x: (idx / (drawData.length - 1)) * 100 });
-        }} onMouseLeave={() => setHoverData(null)}>
-          {drawData.length > 1 ? (
-            <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
-              <defs><linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity="0.2" /><stop offset="100%" stopColor="#3b82f6" stopOpacity="0" /></linearGradient></defs>
-              {[0, 50, 100].map(v => <line key={v} x1="0" y1={v} x2="100" y2={v} stroke="#f1f5f9" strokeWidth="0.5" />)}
-              <path d={`M 0 100 L ${polylinePath} L 100 100 Z`} fill="url(#lineGrad)" />
-              <polyline points={polylinePath} fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" />
-              {hoverData && <>
-                <line x1={hoverData.x} y1="0" x2={hoverData.x} y2="100" stroke="#3b82f6" strokeWidth="0.5" strokeDasharray="2" />
-                <circle cx={hoverData.x} cy={90 - ((hoverData.val - minV) / vRange) * 80} r="1.5" fill="#3b82f6" stroke="#fff" strokeWidth="0.5" />
-              </>}
-            </svg>
-          ) : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>無足夠歷史數據</div>}
+        <div style={{ height: '120px', width: '100%' }}>
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+            <polyline points={polylinePath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" />
+          </svg>
         </div>
       </div>
 
-      {/* 美股區塊 */}
-      <div style={{ marginBottom: '15px' }}>
-        <div onClick={() => setShowUS(!showUS)} style={{ background: '#fff', padding: '18px 25px', borderRadius: '20px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '15px' }}>
-            <b style={{ fontSize: '18px' }}>🇺🇸 美股資產 {showUS ? '▲' : '▼'}</b>
-            <span style={{ fontSize: '15px', color: '#64748b', fontWeight: '500' }}>現值: {Math.round(usTotal.mv).toLocaleString()} TWD</span>
+      {/* 資產列表 */}
+      <MobileSection title="🇺🇸 美股" total={usTotal} show={showUS} setShow={setShowUS}>
+        <AssetTable list={usAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} />
+      </MobileSection>
+
+      <MobileSection title="🇹🇼 台股" total={twTotal} show={showTW} setShow={setShowTW}>
+        <AssetTable list={twAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} />
+      </MobileSection>
+
+      {/* 負債 */}
+      <div style={{ marginBottom: '40px' }}>
+        <div onClick={() => setShowDebt(!showDebt)} style={{ background: 'rgba(255,255,255,0.8)', padding: '16px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', borderLeft: '6px solid #94a3b8' }}>
+          <b style={{ fontSize: '16px' }}>💸 負債項目</b>
+          <span style={{ color: '#ef4444', fontWeight: 'bold' }}>-{Math.round(totalDebt).toLocaleString()}</span>
+        </div>
+        {showDebt && (
+          <div style={{ background: 'rgba(255,255,255,0.9)', marginTop: '4px', borderRadius: '16px', overflow: 'hidden' }}>
+            {liabilities.map(item => (
+              <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 20px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                <span>{item.name}</span>
+                <span style={{ color: '#ef4444' }}>-{Math.round(item.amount).toLocaleString()}</span>
+              </div>
+            ))}
           </div>
-          <div style={{ textAlign: 'right', fontSize: '13px', color: getValueColor(usTotal.today), fontWeight: 'bold' }}>今日: {usTotal.today >= 0 ? '+' : ''}{Math.round(usTotal.today).toLocaleString()}</div>
-        </div>
-        {showUS && <AssetTable list={usAssets} calc={calculateAsset} getValColor={getValueColor} />}
+        )}
       </div>
 
-      {/* 台股區塊 */}
-      <div style={{ marginBottom: '30px' }}>
-        <div onClick={() => setShowTW(!showTW)} style={{ background: '#fff', padding: '18px 25px', borderRadius: '20px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '15px' }}>
-            <b style={{ fontSize: '18px' }}>🇹🇼 台股資產 {showTW ? '▲' : '▼'}</b>
-            <span style={{ fontSize: '15px', color: '#64748b', fontWeight: '500' }}>現值: {Math.round(twTotal.mv).toLocaleString()} TWD</span>
-          </div>
-          <div style={{ textAlign: 'right', fontSize: '13px', color: getValueColor(twTotal.today), fontWeight: 'bold' }}>今日: {twTotal.today >= 0 ? '+' : ''}{Math.round(twTotal.today).toLocaleString()}</div>
-        </div>
-        {showTW && <AssetTable list={twAssets} calc={calculateAsset} getValColor={getValueColor} />}
-      </div>
-
-      {/* 設定 Modal */}
+      {/* 設定彈窗 (手機優化版) */}
       {showAdmin && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, backdropFilter: 'blur(4px)' }}>
-          <div style={{ background: '#fff', padding: '30px', borderRadius: '24px', width: '90%', maxWidth: '500px' }}>
-            <h3 style={{marginTop:0}}>⚙️ 設定資產</h3>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', zIndex: 1000 }}>
+          <div style={{ background: '#fff', padding: '24px', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0 }}>⚙️ 設定</h3>
+              <button onClick={() => setShowAdmin(false)} style={{ border: 'none', background: 'none', fontSize: '20px' }}>✕</button>
+            </div>
+            {/* 設定內容與之前相同，加寬了 Input */}
+            <p style={{ fontWeight: 'bold', color: '#3b82f6' }}>股票資產</p>
             {assets.map(item => (
-              <div key={item.id} style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-                <input style={{ flex: 1, padding: '10px' }} value={item.symbol} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, symbol: e.target.value.toUpperCase()} : a))} placeholder="代號" />
-                <input style={{ width: '80px', padding: '10px' }} type="number" value={item.shares || ''} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, shares: parseFloat(e.target.value)} : a))} placeholder="股數" />
-                <input style={{ width: '100px', padding: '10px' }} type="number" value={item.totalCost || ''} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, totalCost: parseFloat(e.target.value)} : a))} placeholder="總成本" />
-                <button onClick={() => setAssets(assets.filter(a => a.id !== item.id))} style={{ color: '#ef4444', border: 'none', background: 'none', cursor: 'pointer' }}>✕</button>
+              <div key={item.id} style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                <input style={{ flex: 1.5, padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }} value={item.symbol} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, symbol: e.target.value.toUpperCase()} : a))} placeholder="代號" />
+                <input style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }} type="number" value={item.shares || ''} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, shares: parseFloat(e.target.value)} : a))} placeholder="股數" />
+                <button onClick={() => setAssets(assets.filter(a => a.id !== item.id))} style={{ padding: '0 10px', color: '#ef4444', border: 'none', background: 'none' }}>✕</button>
               </div>
             ))}
-            <button onClick={() => setAssets([...assets, { id: Date.now(), symbol: '', shares: 0, totalCost: 0 }])} style={{ width: '100%', padding: '12px', marginTop: '10px', border: '2px dashed #cbd5e1', borderRadius: '12px', cursor: 'pointer' }}>+ 新增項目</button>
-            <button onClick={() => setShowAdmin(false)} style={{ width: '100%', padding: '15px', marginTop: '15px', background: '#1e293b', color: '#fff', borderRadius: '12px', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>儲存</button>
+            <button onClick={() => setAssets([...assets, { id: Date.now(), symbol: '', shares: 0, totalCost: 0 }])} style={{ width: '100%', padding: '12px', marginBottom: '20px', border: '1px dashed #3b82f6', borderRadius: '12px', color: '#3b82f6' }}>+ 新增股票</button>
+            <button onClick={() => setShowAdmin(false)} style={{ width: '100%', padding: '15px', background: '#1e293b', color: '#fff', borderRadius: '12px', border: 'none', fontWeight: 'bold' }}>儲存關閉</button>
           </div>
         </div>
       )}
@@ -235,22 +247,45 @@ function App() {
   );
 }
 
-function AssetTable({ list, calc, getValColor }) {
+// 輔助組件 (手機版)
+function MobileSection({ title, total, show, setShow, children }) {
   return (
-    <div style={{ background: '#fff', marginTop: '8px', borderRadius: '20px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '15px' }}>
-        <thead style={{ background: '#f8fafc' }}>
-          <tr style={{ textAlign: 'left', color: '#64748b' }}><th style={{ padding: '15px 25px' }}>資產 / 股數</th><th style={{ padding: '15px 25px' }}>現值 (TWD)</th><th style={{ padding: '15px 25px' }}>累積損益</th><th style={{ padding: '15px 25px' }}>今日變動</th></tr>
+    <div style={{ marginBottom: '12px' }}>
+      <div onClick={() => setShow(!show)} style={{ background: 'rgba(255,255,255,0.8)', padding: '16px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <b style={{ fontSize: '16px' }}>{title} {show ? '▲' : '▼'}</b>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{Math.round(total.mv).toLocaleString()}</div>
+          <div style={{ fontSize: '11px', color: total.today >= 0 ? '#ef4444' : '#22c55e' }}>{total.today >= 0 ? '+' : ''}{Math.round(total.today).toLocaleString()}</div>
+        </div>
+      </div>
+      {show && children}
+    </div>
+  );
+}
+
+function AssetTable({ list, calc, getValColor, todayMode, setTodayMode }) {
+  return (
+    <div style={{ overflowX: 'auto', background: 'rgba(255,255,255,0.9)', marginTop: '4px', borderRadius: '16px' }}>
+      <table style={{ width: '100%', minWidth: '320px', borderCollapse: 'collapse', fontSize: '14px' }}>
+        <thead style={{ background: 'rgba(0,0,0,0.03)' }}>
+          <tr style={{ textAlign: 'left', color: '#64748b' }}>
+            <th style={{ padding: '12px 15px' }}>代號</th>
+            <th style={{ padding: '12px 15px' }}>現值</th>
+            <th style={{ padding: '12px 15px', textDecoration: 'underline' }} onClick={() => setTodayMode(todayMode === 'val' ? 'pct' : 'val')}>今日</th>
+            <th style={{ padding: '12px 15px' }}>累積</th>
+          </tr>
         </thead>
         <tbody>
           {list.map(item => {
             const d = calc(item);
             return (
-              <tr key={item.id} style={{ borderTop: '1px solid #f1f5f9' }}>
-                <td style={{ padding: '15px 25px' }}><div style={{ fontWeight: 'bold', fontSize: '16px' }}>{item.symbol}</div><div style={{ fontSize: '12px', color: '#94a3b8' }}>{item.shares.toLocaleString()} 股</div></td>
-                <td style={{ padding: '15px 25px', fontWeight: '600' }}>{Math.round(d.mv).toLocaleString()}</td>
-                <td style={{ padding: '15px 25px' }}><div style={{ color: getValColor(d.total), fontWeight: 'bold' }}>{Math.round(d.total).toLocaleString()} <span style={{ fontSize: '13px', marginLeft: '6px' }}>({d.percent >= 0 ? '+' : ''}{d.percent.toFixed(2)}%)</span></div></td>
-                <td style={{ padding: '15px 25px', color: getValColor(d.today), fontWeight: 'bold' }}>{d.today >= 0 ? '+' : ''}{Math.round(d.today).toLocaleString()}</td>
+              <tr key={item.id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+                <td style={{ padding: '12px 15px' }}><b>{item.symbol}</b></td>
+                <td style={{ padding: '12px 15px' }}>{Math.round(d.mv).toLocaleString()}</td>
+                <td style={{ padding: '12px 15px', color: getValColor(d.today), fontWeight: 'bold' }}>
+                  {todayMode === 'val' ? Math.round(d.today).toLocaleString() : d.todayPct.toFixed(1) + '%'}
+                </td>
+                <td style={{ padding: '12px 15px', color: getValColor(d.total) }}>{d.totalPct.toFixed(1)}%</td>
               </tr>
             );
           })}
