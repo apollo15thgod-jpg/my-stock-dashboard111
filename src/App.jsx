@@ -23,12 +23,12 @@ function App() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showUS, setShowUS] = useState(true);
   const [showTW, setShowTW] = useState(true);
-  const [showOther, setShowOther] = useState(true); // 銀行存款摺疊狀態
+  const [showOther, setShowOther] = useState(true);
   const [showDebt, setShowDebt] = useState(true);
   const [todayMode, setTodayMode] = useState('val'); 
   const [priceMode, setPriceMode] = useState('unit');
 
-  // --- 數據抓取邏輯 ---
+  // --- 數據抓取 ---
   const fetchRateFromCloud = useCallback(async () => {
     try {
       const res = await fetch(`${CALC_CSV_URL}&t=${Date.now()}`);
@@ -75,23 +75,20 @@ function App() {
       }));
       setAssets(updated);
       await fetchHistoryFromCloud();
-    } catch (e) { console.error("更新失敗", e); } finally { setLoading(false); }
+    } catch (e) { console.error(e); } finally { setLoading(false); }
   }, [assets, loading, fetchRateFromCloud, fetchHistoryFromCloud, PRICE_CSV_URL, API_KEY]);
 
-  // 每 10 秒自動更新
   useEffect(() => {
     const autoTimer = setInterval(() => refreshPrices(), 10000);
     return () => clearInterval(autoTimer);
   }, [refreshPrices]);
 
   useEffect(() => { fetchHistoryFromCloud(); fetchRateFromCloud(); }, [fetchHistoryFromCloud, fetchRateFromCloud]);
-  
-  // 存儲數據
   useEffect(() => { localStorage.setItem('myAssets', JSON.stringify(assets)); }, [assets]);
   useEffect(() => { localStorage.setItem('myOtherAssets', JSON.stringify(otherAssets)); }, [otherAssets]);
   useEffect(() => { localStorage.setItem('myLiabilities', JSON.stringify(liabilities)); }, [liabilities]);
 
-  // --- 計算總額 ---
+  // --- 計算核心 ---
   const calculateAsset = (item) => {
     const isUS = !/^\d/.test(item.symbol);
     const m = isUS ? exchangeRate : 1;
@@ -107,46 +104,59 @@ function App() {
 
   const usAssets = assets.filter(a => !/^\d/.test(a.symbol));
   const twAssets = assets.filter(a => /^\d/.test(a.symbol));
-  const sumData = (list) => list.reduce((acc, a) => {
-    const d = calculateAsset(a);
-    return { mv: acc.mv + d.mv, today: acc.today + d.today, total: acc.total + d.total, cost: acc.cost + (a.totalCost * (d.isUS ? exchangeRate : 1)) };
-  }, { mv: 0, today: 0, total: 0, cost: 0 });
-
-  const usTotal = sumData(usAssets);
-  const twTotal = sumData(twAssets);
   const totalOtherAssets = otherAssets.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
   const totalDebt = liabilities.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
-  
+
+  const usTotal = usAssets.reduce((acc, a) => {
+    const d = calculateAsset(a);
+    return { mv: acc.mv + d.mv, today: acc.today + d.today, total: acc.total + d.total, cost: acc.cost + (a.totalCost * exchangeRate) };
+  }, { mv: 0, today: 0, total: 0, cost: 0 });
+
+  const twTotal = twAssets.reduce((acc, a) => {
+    const d = calculateAsset(a);
+    return { mv: acc.mv + d.mv, today: acc.today + d.today, total: acc.total + d.total, cost: acc.cost + a.totalCost };
+  }, { mv: 0, today: 0, total: 0, cost: 0 });
+
   const grandTotal = { 
-    mv: usTotal.mv + twTotal.mv + totalOtherAssets, // 總市值包含銀行存款
+    mv: usTotal.mv + twTotal.mv + totalOtherAssets,
     today: usTotal.today + twTotal.today, 
     total: usTotal.total + twTotal.total,
     percent: (usTotal.cost + twTotal.cost) > 0 ? ((usTotal.total + twTotal.total) / (usTotal.cost + twTotal.cost)) * 100 : 0
   };
 
-  // --- 圖表計算 ---
+  // --- 圖表邏輯：加總 台股 + 美股 + 存款 ---
   const chartData = useMemo(() => {
     if (!history || history.length < 2) return null;
-    const vals = history.map(d => d.val);
+    
+    // 將歷史中的股市價值加上目前的銀行存款，形成「總資產歷史軌跡」
+    const combinedHistory = history.map(h => ({
+      ...h,
+      totalVal: h.val + totalOtherAssets
+    }));
+
+    const vals = combinedHistory.map(d => d.totalVal);
     const minV = Math.floor(Math.min(...vals) / 10000) * 10000;
     const maxV = Math.ceil(Math.max(...vals) / 10000) * 10000;
     const vRange = maxV - minV || 10000;
+    
     const yTicks = [];
     for (let v = minV; v <= maxV; v += 10000) yTicks.push(v);
-    const points = history.map((h, i) => {
-      const x = (i / (history.length - 1)) * 100;
-      const y = 100 - ((h.val - minV) / vRange) * 100;
+    
+    const points = combinedHistory.map((h, i) => {
+      const x = (i / (combinedHistory.length - 1)) * 100;
+      const y = 100 - ((h.totalVal - minV) / vRange) * 100;
       return `${x},${y}`;
     }).join(' ');
+
     return { points, yTicks, minV, maxV, vRange };
-  }, [history]);
+  }, [history, totalOtherAssets]);
 
   const getValueColor = (val) => (val >= 0 ? '#ef4444' : '#22c55e');
 
   return (
     <div style={{ padding: '12px', fontFamily: '-apple-system, system-ui, sans-serif', maxWidth: '1000px', margin: '0 auto', minHeight: '100vh', backgroundImage: `linear-gradient(rgba(240, 242, 245, 0.75), rgba(240, 242, 245, 0.75)), url('https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?q=80&w=2067&auto=format&fit=crop')`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed', boxSizing: 'border-box' }}>
       
-      {/* 操作按鈕 */}
+      {/* 頂部按鈕 */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '12px' }}>
         <button onClick={refreshPrices} disabled={loading} style={{ flex: 1, maxWidth: '120px', padding: '12px 0', background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(5px)', border: '1px solid #cbd5e1', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', position: 'relative' }}>
           {loading ? '⚡ 更新中' : '🔄 自動更新中'}
@@ -160,7 +170,7 @@ function App() {
       {/* 總覽卡片 */}
       <div style={{ background: 'rgba(30, 41, 59, 0.95)', backdropFilter: 'blur(10px)', color: '#fff', padding: '25px', borderRadius: '24px', marginBottom: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}>
         <div style={{ borderRight: '1px solid rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
-          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>總資產 (TWD)</div>
+          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>總資產 (含存款)</div>
           <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{Math.round(grandTotal.mv).toLocaleString()}</div>
         </div>
         <div style={{ textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
@@ -168,11 +178,11 @@ function App() {
           <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fbbf24' }}>{exchangeRate.toFixed(2)}</div>
         </div>
         <div style={{ borderRight: '1px solid rgba(255,255,255,0.1)', paddingTop: '15px' }}>
-          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>今日損益</div>
+          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>今日股票損益</div>
           <div style={{ fontSize: '24px', fontWeight: 'bold', color: getValueColor(grandTotal.today) }}>{grandTotal.today >= 0 ? '+' : ''}{Math.round(grandTotal.today).toLocaleString()}</div>
         </div>
         <div style={{ textAlign: 'right', paddingTop: '15px' }}>
-          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>累積損益</div>
+          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>累積股票損益</div>
           <div style={{ fontSize: '24px', fontWeight: 'bold', color: getValueColor(grandTotal.total) }}>
             {Math.round(grandTotal.total).toLocaleString()}
             <div style={{ fontSize: '14px', opacity: 0.9 }}>({grandTotal.percent >= 0 ? '+' : ''}{grandTotal.percent.toFixed(2)}%)</div>
@@ -180,9 +190,9 @@ function App() {
         </div>
       </div>
 
-      {/* 歷史趨勢圖 */}
+      {/* 歷史趨勢圖 (總計：美股+台股+存款) */}
       <div style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(10px)', padding: '20px 16px', borderRadius: '24px', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.3)' }}>
-        <b style={{ fontSize: '16px', color: '#1e293b', display:'block', marginBottom:'16px' }}>📊 歷史資產趨勢 </b>
+        <b style={{ fontSize: '16px', color: '#1e293b', display:'block', marginBottom:'16px' }}>📊 總資產趨勢 </b>
         <div style={{ height: '180px', width: '100%', position: 'relative', paddingLeft: '45px', boxSizing: 'border-box' }}>
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
             {chartData?.yTicks.map(tick => {
@@ -199,7 +209,7 @@ function App() {
         </div>
       </div>
 
-      {/* 股票資產區塊 */}
+      {/* 資產區塊 */}
       <MobileSection title="🇺🇸 美股資產" total={usTotal} show={showUS} setShow={setShowUS}>
         <AssetTable list={usAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
@@ -208,7 +218,6 @@ function App() {
         <AssetTable list={twAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
 
-      {/* 🏦 銀行存款區塊 (新增) */}
       <div style={{ marginBottom: '12px' }}>
         <div onClick={() => setShowOther(!showOther)} style={{ background: 'rgba(255,255,255,0.8)', padding: '18px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', alignItems:'center', borderLeft: '6px solid #3b82f6' }}>
           <b style={{ fontSize: '16px' }}>🏦 存款/現金資產 {showOther ? '▲' : '▼'}</b>
@@ -216,17 +225,17 @@ function App() {
         </div>
         {showOther && (
           <div style={{ background: 'rgba(255,255,255,0.9)', marginTop: '6px', borderRadius: '16px', overflow: 'hidden' }}>
-            {otherAssets.length > 0 ? otherAssets.map(item => (
+            {otherAssets.map(item => (
               <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-                <span style={{fontWeight:'500'}}>{item.name}</span>
-                <span style={{ color: '#1e293b', fontWeight: 'bold' }}>{Math.round(item.amount).toLocaleString()}</span>
+                <span>{item.name}</span>
+                <span style={{ fontWeight: 'bold' }}>{Math.round(item.amount).toLocaleString()}</span>
               </div>
-            )) : <div style={{padding:'20px', textAlign:'center', color:'#94a3b8'}}>請於設定中新增存款資料</div>}
+            ))}
           </div>
         )}
       </div>
 
-      {/* 💸 負債區塊 */}
+      {/* 負債區塊 */}
       <div style={{ marginBottom: '40px' }}>
         <div onClick={() => setShowDebt(!showDebt)} style={{ background: 'rgba(255,255,255,0.8)', padding: '18px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', alignItems:'center', borderLeft: '6px solid #94a3b8' }}>
           <b style={{ fontSize: '16px' }}>💸 負債明細 {showDebt ? '▲' : '▼'}</b>
@@ -234,57 +243,54 @@ function App() {
         </div>
         {showDebt && (
           <div style={{ background: 'rgba(255,255,255,0.9)', marginTop: '6px', borderRadius: '16px', overflow: 'hidden' }}>
-            {liabilities.length > 0 ? liabilities.map(item => (
+            {liabilities.map(item => (
               <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-                <span style={{fontWeight:'500'}}>{item.name}</span>
+                <span>{item.name}</span>
                 <span style={{ color: '#ef4444', fontWeight: 'bold' }}>-{Math.round(item.amount).toLocaleString()}</span>
               </div>
-            )) : <div style={{padding:'20px', textAlign:'center', color:'#94a3b8'}}>尚無資料</div>}
+            ))}
           </div>
         )}
       </div>
 
-      {/* 設定彈窗 */}
+      {/* 設定 Modal */}
       {showAdmin && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
-          <div style={{ background: '#fff', padding: '24px', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', width: '100%', maxHeight: '85vh', overflowY: 'auto', boxSizing: 'border-box' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}><h3 style={{ margin: 0 }}>⚙️ 完整資產設定</h3><button onClick={() => setShowAdmin(false)} style={{ border: 'none', background: '#f1f5f9', padding: '8px 12px', borderRadius: '50%' }}>✕</button></div>
+          <div style={{ background: '#fff', padding: '24px', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}><h3>⚙️ 設定</h3><button onClick={() => setShowAdmin(false)}>✕</button></div>
             
-            {/* 股票設定 */}
-            <p style={{ fontWeight: 'bold', color: '#3b82f6' }}>📈 股票資產 (代號/股數/成本)</p>
+            <p style={{ fontWeight: 'bold', color: '#3b82f6' }}>📈 股票 (代號/股數/成本)</p>
             {assets.map(item => (
-              <div key={item.id} style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-                <input style={{ flex: 1.2, padding: '12px', borderRadius: '10px', border: '1px solid #ddd' }} value={item.symbol} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, symbol: e.target.value.toUpperCase()} : a))} placeholder="代號" />
-                <input style={{ flex: 1, padding: '12px', borderRadius: '10px', border: '1px solid #ddd' }} type="number" value={item.shares || ''} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, shares: parseFloat(e.target.value)} : a))} placeholder="股數" />
-                <input style={{ flex: 1, padding: '12px', borderRadius: '10px', border: '1px solid #ddd' }} type="number" value={item.totalCost || ''} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, totalCost: parseFloat(e.target.value)} : a))} placeholder="成本" />
-                <button onClick={() => setAssets(assets.filter(a => a.id !== item.id))} style={{ padding: '0 10px', color: '#ef4444', border: 'none', background: 'none' }}>✕</button>
+              <div key={item.id} style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                <input style={{ flex: 1.2, padding: '10px' }} value={item.symbol} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, symbol: e.target.value.toUpperCase()} : a))} />
+                <input style={{ flex: 1, padding: '10px' }} type="number" value={item.shares} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, shares: parseFloat(e.target.value)} : a))} />
+                <input style={{ flex: 1, padding: '10px' }} type="number" value={item.totalCost} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, totalCost: parseFloat(e.target.value)} : a))} />
+                <button onClick={() => setAssets(assets.filter(a => a.id !== item.id))}>✕</button>
               </div>
             ))}
-            <button onClick={() => setAssets([...assets, { id: Date.now(), symbol: '', shares: 0, totalCost: 0 }])} style={{ width: '100%', padding: '12px', marginBottom: '20px', border: '1px dashed #3b82f6', borderRadius: '12px', color: '#3b82f6', background: 'none' }}>+ 新增股票</button>
-            
-            {/* 銀行存款設定 (新增) */}
-            <p style={{ fontWeight: 'bold', color: '#10b981' }}>🏦 銀行存款/現金 (名稱/金額)</p>
-            {otherAssets.map(item => (
-              <div key={item.id} style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-                <input style={{ flex: 2, padding: '12px', borderRadius: '10px', border: '1px solid #ddd' }} value={item.name} onChange={e => setOtherAssets(otherAssets.map(o => o.id === item.id ? {...o, name: e.target.value} : o))} placeholder="例：中信/台新/現金" />
-                <input style={{ flex: 1, padding: '12px', borderRadius: '10px', border: '1px solid #ddd' }} type="number" value={item.amount || ''} onChange={e => setOtherAssets(otherAssets.map(o => o.id === item.id ? {...o, amount: parseFloat(e.target.value)} : o))} placeholder="金額" />
-                <button onClick={() => setOtherAssets(otherAssets.filter(o => o.id !== item.id))} style={{ padding: '0 10px', color: '#ef4444', border: 'none', background: 'none' }}>✕</button>
-              </div>
-            ))}
-            <button onClick={() => setOtherAssets([...otherAssets, { id: Date.now(), name: '', amount: 0 }])} style={{ width: '100%', padding: '12px', marginBottom: '20px', border: '1px dashed #10b981', borderRadius: '12px', color: '#10b981', background: 'none' }}>+ 新增存款</button>
+            <button onClick={() => setAssets([...assets, { id: Date.now(), symbol: '', shares: 0, totalCost: 0 }])} style={{ width: '100%', padding: '10px', marginBottom: '15px' }}>+ 新增股票</button>
 
-            {/* 負債設定 */}
+            <p style={{ fontWeight: 'bold', color: '#10b981' }}>🏦 銀行存款 (名稱/金額)</p>
+            {otherAssets.map(item => (
+              <div key={item.id} style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                <input style={{ flex: 2, padding: '10px' }} value={item.name} onChange={e => setOtherAssets(otherAssets.map(o => o.id === item.id ? {...o, name: e.target.value} : o))} />
+                <input style={{ flex: 1, padding: '10px' }} type="number" value={item.amount} onChange={e => setOtherAssets(otherAssets.map(o => o.id === item.id ? {...o, amount: parseFloat(e.target.value)} : o))} />
+                <button onClick={() => setOtherAssets(otherAssets.filter(o => o.id !== item.id))}>✕</button>
+              </div>
+            ))}
+            <button onClick={() => setOtherAssets([...otherAssets, { id: Date.now(), name: '', amount: 0 }])} style={{ width: '100%', padding: '10px', marginBottom: '15px' }}>+ 新增存款</button>
+
             <p style={{ fontWeight: 'bold', color: '#ef4444' }}>💸 負債 (名稱/金額)</p>
             {liabilities.map(item => (
-              <div key={item.id} style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-                <input style={{ flex: 2, padding: '12px', borderRadius: '10px', border: '1px solid #ddd' }} value={item.name} onChange={e => setLiabilities(liabilities.map(l => l.id === item.id ? {...l, name: e.target.value} : l))} placeholder="例：房貸/信貸" />
-                <input style={{ flex: 1, padding: '12px', borderRadius: '10px', border: '1px solid #ddd' }} type="number" value={item.amount || ''} onChange={e => setLiabilities(liabilities.map(l => l.id === item.id ? {...l, amount: parseFloat(e.target.value)} : l))} placeholder="金額" />
-                <button onClick={() => setLiabilities(liabilities.filter(l => l.id !== item.id))} style={{ padding: '0 10px', color: '#ef4444', border: 'none', background: 'none' }}>✕</button>
+              <div key={item.id} style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                <input style={{ flex: 2, padding: '10px' }} value={item.name} onChange={e => setLiabilities(liabilities.map(l => l.id === item.id ? {...l, name: e.target.value} : l))} />
+                <input style={{ flex: 1, padding: '10px' }} type="number" value={item.amount} onChange={e => setLiabilities(liabilities.map(l => l.id === item.id ? {...l, amount: parseFloat(e.target.value)} : l))} />
+                <button onClick={() => setLiabilities(liabilities.filter(l => l.id !== item.id))}>✕</button>
               </div>
             ))}
-            <button onClick={() => setLiabilities([...liabilities, { id: Date.now(), name: '', amount: 0 }])} style={{ width: '100%', padding: '12px', marginBottom: '25px', border: '1px dashed #ef4444', borderRadius: '12px', color: '#ef4444', background: 'none' }}>+ 新增負債</button>
-            
-            <button onClick={() => setShowAdmin(false)} style={{ width: '100%', padding: '16px', background: '#1e293b', color: '#fff', borderRadius: '14px', border: 'none', fontWeight: 'bold' }}>儲存並關閉</button>
+            <button onClick={() => setLiabilities([...liabilities, { id: Date.now(), name: '', amount: 0 }])} style={{ width: '100%', padding: '10px', marginBottom: '20px' }}>+ 新增負債</button>
+
+            <button onClick={() => setShowAdmin(false)} style={{ width: '100%', padding: '15px', background: '#1e293b', color: '#fff', borderRadius: '10px' }}>儲存並關閉</button>
           </div>
         </div>
       )}
@@ -292,7 +298,6 @@ function App() {
   );
 }
 
-// 子組件：股票摺疊區塊
 function MobileSection({ title, total, show, setShow, children }) {
   return (
     <div style={{ marginBottom: '12px' }}>
@@ -308,16 +313,15 @@ function MobileSection({ title, total, show, setShow, children }) {
   );
 }
 
-// 子組件：資產表格
 function AssetTable({ list, calc, getValColor, todayMode, setTodayMode, priceMode, setPriceMode }) {
   return (
     <div style={{ overflowX: 'auto', background: 'rgba(255,255,255,0.9)', marginTop: '6px', borderRadius: '18px' }}>
       <table style={{ width: '100%', minWidth: '380px', borderCollapse: 'collapse', fontSize: '14px' }}>
         <thead style={{ background: 'rgba(0,0,0,0.03)' }}>
           <tr style={{ textAlign: 'left', color: '#64748b' }}>
-            <th style={{ padding: '12px 15px' }}>資產/股數</th>
-            <th style={{ padding: '12px 15px', textDecoration: 'underline dotted', cursor: 'pointer' }} onClick={() => setPriceMode(priceMode === 'total' ? 'unit' : 'total')}>{priceMode === 'unit' ? '現價' : '現值'}</th>
-            <th style={{ padding: '12px 15px', textDecoration: 'underline dotted', cursor: 'pointer' }} onClick={() => setTodayMode(todayMode === 'val' ? 'pct' : 'val')}>今日</th>
+            <th style={{ padding: '12px 15px' }}>代號</th>
+            <th style={{ padding: '12px 15px', cursor: 'pointer' }} onClick={() => setPriceMode(priceMode === 'total' ? 'unit' : 'total')}>{priceMode === 'unit' ? '現價' : '現值'}</th>
+            <th style={{ padding: '12px 15px', cursor: 'pointer' }} onClick={() => setTodayMode(todayMode === 'val' ? 'pct' : 'val')}>今日</th>
             <th style={{ padding: '12px 15px' }}>累積</th>
           </tr>
         </thead>
@@ -326,10 +330,10 @@ function AssetTable({ list, calc, getValColor, todayMode, setTodayMode, priceMod
             const d = calc(item);
             return (
               <tr key={item.id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
-                <td style={{ padding: '12px 15px' }}><div style={{ fontWeight: 'bold' }}>{item.symbol}</div><div style={{ fontSize: '11px', color: '#94a3b8' }}>{item.shares.toLocaleString()}</div></td>
-                <td style={{ padding: '12px 15px', fontWeight: '600' }}>{priceMode === 'unit' ? `${d.isUS ? '$' : ''}${d.unitPrice.toLocaleString()}` : Math.round(d.mv).toLocaleString()}</td>
-                <td style={{ padding: '12px 15px', color: getValColor(d.today), fontWeight: 'bold' }}>{todayMode === 'val' ? (d.today >= 0 ? '+' : '') + Math.round(d.today).toLocaleString() : (d.todayPct >= 0 ? '+' : '') + d.todayPct.toFixed(2) + '%'}</td>
-                <td style={{ padding: '12px 15px' }}><div style={{ color: getValColor(d.total), fontWeight: 'bold' }}>{d.totalPct.toFixed(1)}%</div><div style={{ fontSize: '11px', color: getValColor(d.total) }}>{Math.round(d.total).toLocaleString()}</div></td>
+                <td style={{ padding: '12px 15px' }}><b>{item.symbol}</b><br/><small>{item.shares.toLocaleString()}</small></td>
+                <td style={{ padding: '12px 15px' }}>{priceMode === 'unit' ? (d.isUS ? '$' : '') + d.unitPrice.toLocaleString() : Math.round(d.mv).toLocaleString()}</td>
+                <td style={{ padding: '12px 15px', color: getValColor(d.today) }}>{todayMode === 'val' ? (d.today >= 0 ? '+' : '') + Math.round(d.today).toLocaleString() : (d.todayPct >= 0 ? '+' : '') + d.todayPct.toFixed(2) + '%'}</td>
+                <td style={{ padding: '12px 15px' }}><div style={{ color: getValColor(d.total), fontWeight: 'bold' }}>{d.totalPct.toFixed(1)}%</div></td>
               </tr>
             );
           })}
