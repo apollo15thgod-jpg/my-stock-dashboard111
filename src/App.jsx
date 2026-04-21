@@ -21,10 +21,13 @@ function App() {
   const [exchangeRate, setExchangeRate] = useState(32.0);
   const [loading, setLoading] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
-  const [showUS, setShowUS] = useState(true);
-  const [showTW, setShowTW] = useState(true);
-  const [showOther, setShowOther] = useState(true);
-  const [showDebt, setShowDebt] = useState(true);
+
+  // 關鍵調整：將初始值全部設為 false (預設折疊)
+  const [showUS, setShowUS] = useState(false);
+  const [showTW, setShowTW] = useState(false);
+  const [showOther, setShowOther] = useState(false);
+  const [showDebt, setShowDebt] = useState(false);
+
   const [todayMode, setTodayMode] = useState('val'); 
   const [priceMode, setPriceMode] = useState('unit');
 
@@ -132,7 +135,6 @@ function App() {
   const usTotal = getSum(usAssets);
   const twTotal = getSum(twAssets);
 
-  // 總資產 = 台股 + 美股 + 存款 (不扣負債)
   const grandTotal = { 
     mv: usTotal.mv + twTotal.mv + totalOtherAssets,
     today: usTotal.today + twTotal.today, 
