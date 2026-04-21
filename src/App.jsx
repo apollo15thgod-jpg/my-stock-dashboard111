@@ -28,7 +28,6 @@ function App() {
   const [todayMode, setTodayMode] = useState('val'); 
   const [priceMode, setPriceMode] = useState('unit');
 
-  // 使用 Ref 來儲存當前資產，方便在非同步過程中對比，防止閃爍
   const assetsRef = useRef(assets);
   useEffect(() => { assetsRef.current = assets; }, [assets]);
 
@@ -58,7 +57,6 @@ function App() {
     } catch (e) { console.error("歷史數據失敗"); }
   }, [HISTORY_CSV_URL]);
 
-  // 核心：分離「手動/自動」邏輯，並解決閃爍 0 的問題
   const refreshPrices = useCallback(async (isManual = false) => {
     if (isManual) setLoading(true);
     try {
@@ -66,12 +64,9 @@ function App() {
         await fetchRateFromCloud();
         await fetchHistoryFromCloud();
       }
-
       const csvRes = await fetch(`${PRICE_CSV_URL}&t=${Date.now()}`);
       const csvText = await csvRes.text();
       const lines = csvText.split(/\r?\n/).map(line => line.replace(/[",]/g, '').trim());
-      
-      // 重要：確保抓到的數值有效，否則延用舊值
       const twCurrentPrice = parseFloat(lines[0]);
       const twYesterdayClose = parseFloat(lines[1]);
 
@@ -81,10 +76,8 @@ function App() {
           if (!/^\d/.test(item.symbol)) {
             const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${item.symbol}&token=${API_KEY}`);
             const data = await res.json();
-            // 如果抓取失敗，保留原本的數值 (data.c || item.price)
             if (data.c) return { ...item, price: data.c, prevClose: data.pc || data.c };
           } else {
-            // 台股邏輯：如果 CSV 抓取失敗 (NaN)，保留舊數值避免跳 0
             return { 
               ...item, 
               price: isNaN(twCurrentPrice) ? item.price : twCurrentPrice, 
@@ -94,52 +87,34 @@ function App() {
         } catch (e) { return item; }
         return item;
       }));
-      
-      // 深度對比，若完全沒變則不觸發渲染
       setAssets(prev => JSON.stringify(prev) === JSON.stringify(updated) ? prev : updated);
-    } catch (e) { 
-      console.error("更新中斷", e); 
-    } finally { 
-      if (isManual) setLoading(false); 
-    }
+    } catch (e) { console.error("更新中斷", e); } finally { if (isManual) setLoading(false); }
   }, [fetchRateFromCloud, fetchHistoryFromCloud, PRICE_CSV_URL, API_KEY]);
 
-  // 設定 10 秒計時器：安靜模式
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (!showAdmin) {
-        refreshPrices(false); 
-      }
-    }, 10000); 
+    const timer = setInterval(() => { if (!showAdmin) refreshPrices(false); }, 10000); 
     return () => clearInterval(timer);
   }, [refreshPrices, showAdmin]);
 
-  // 初次載入
-  useEffect(() => {
-    refreshPrices(true);
-  }, [refreshPrices]);
+  useEffect(() => { refreshPrices(true); }, []);
 
   useEffect(() => { localStorage.setItem('myAssets', JSON.stringify(assets)); }, [assets]);
   useEffect(() => { localStorage.setItem('myOtherAssets', JSON.stringify(otherAssets)); }, [otherAssets]);
   useEffect(() => { localStorage.setItem('myLiabilities', JSON.stringify(liabilities)); }, [liabilities]);
 
-  // --- 計算核心 (加入 Fallback 避免 0) ---
+  // --- 計算核心 ---
   const calculateAsset = (item) => {
     const isUS = !/^\d/.test(item.symbol);
     const m = isUS ? exchangeRate : 1;
     const p = item.price || 0;
-    // 如果 prevClose 是 0，則今日損益會變得很奇怪，這裡給予防禦
     const pc = (item.prevClose && item.prevClose !== 0) ? item.prevClose : p;
-
     const mv = p * (item.shares || 0) * m;
     const prevMv = pc * (item.shares || 0) * m;
     const costTWD = (item.totalCost || 0) * (isUS ? exchangeRate : 1); 
-    
     const todayLoss = mv - prevMv;
     const todayPct = pc > 0 ? ((p - pc) / pc) * 100 : 0;
     const totalLoss = mv - costTWD;
     const totalPct = costTWD > 0 ? (totalLoss / costTWD) * 100 : 0;
-
     return { isUS, mv, today: todayLoss, todayPct, total: totalLoss, totalPct, unitPrice: p };
   };
 
@@ -151,19 +126,15 @@ function App() {
   const getSum = (list) => list.reduce((acc, a) => {
     const d = calculateAsset(a);
     const m = d.isUS ? exchangeRate : 1;
-    return { 
-      mv: acc.mv + d.mv, 
-      today: acc.today + d.today, 
-      total: acc.total + d.total, 
-      cost: acc.cost + (a.totalCost * m) 
-    };
+    return { mv: acc.mv + d.mv, today: acc.today + d.today, total: acc.total + d.total, cost: acc.cost + (a.totalCost * m) };
   }, { mv: 0, today: 0, total: 0, cost: 0 });
 
   const usTotal = getSum(usAssets);
   const twTotal = getSum(twAssets);
 
+  // 淨資產 = (美股+台股+存款) - 負債
   const grandTotal = { 
-    mv: usTotal.mv + twTotal.mv + totalOtherAssets,
+    mv: (usTotal.mv + twTotal.mv + totalOtherAssets) - totalDebt,
     today: usTotal.today + twTotal.today, 
     total: usTotal.total + twTotal.total,
     percent: (usTotal.cost + twTotal.cost) > 0 ? ((usTotal.total + twTotal.total) / (usTotal.cost + twTotal.cost)) * 100 : 0
@@ -171,7 +142,7 @@ function App() {
 
   const chartData = useMemo(() => {
     if (!history || history.length < 2) return null;
-    const combinedHistory = history.map(h => ({ ...h, totalVal: h.val + totalOtherAssets }));
+    const combinedHistory = history.map(h => ({ ...h, totalVal: (h.val + totalOtherAssets) - totalDebt }));
     const vals = combinedHistory.map(d => d.totalVal);
     const minV = Math.floor(Math.min(...vals) / 10000) * 10000;
     const maxV = Math.ceil(Math.max(...vals) / 10000) * 10000;
@@ -184,7 +155,7 @@ function App() {
       return `${x},${y}`;
     }).join(' ');
     return { points, yTicks, minV, maxV, vRange };
-  }, [history, totalOtherAssets]);
+  }, [history, totalOtherAssets, totalDebt]);
 
   const getValueColor = (val) => (val >= 0.01 ? '#ef4444' : val <= -0.01 ? '#22c55e' : '#64748b');
 
@@ -205,7 +176,7 @@ function App() {
       {/* 總覽卡片 */}
       <div style={{ background: 'rgba(30, 41, 59, 0.95)', backdropFilter: 'blur(10px)', color: '#fff', padding: '25px', borderRadius: '24px', marginBottom: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}>
         <div style={{ borderRight: '1px solid rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
-          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>總資產 (含存款)</div>
+          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>淨資產 (資產-負債)</div>
           <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{Math.round(grandTotal.mv).toLocaleString()}</div>
         </div>
         <div style={{ textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
@@ -225,6 +196,25 @@ function App() {
         </div>
       </div>
 
+      {/* 趨勢圖 */}
+      <div style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(10px)', padding: '20px 16px', borderRadius: '24px', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.3)' }}>
+        <b style={{ fontSize: '16px', color: '#1e293b', display:'block', marginBottom:'16px' }}>📊 淨資產趨勢</b>
+        <div style={{ height: '180px', width: '100%', position: 'relative', paddingLeft: '45px', boxSizing: 'border-box' }}>
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+            {chartData?.yTicks.map(tick => {
+              const y = 100 - ((tick - chartData.minV) / chartData.vRange) * 100;
+              return (
+                <g key={tick}>
+                  <line x1="0" y1={y} x2="100" y2={y} stroke="rgba(0,0,0,0.06)" strokeWidth="0.5" />
+                  <text x="-4" y={y} fontSize="4" fill="#94a3b8" dominantBaseline="middle" textAnchor="end">{tick / 10000}萬</text>
+                </g>
+              );
+            })}
+            {chartData && <polyline points={chartData.points} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />}
+          </svg>
+        </div>
+      </div>
+
       <MobileSection title="🇺🇸 美股資產" total={usTotal} show={showUS} setShow={setShowUS}>
         <AssetTable list={usAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
@@ -233,10 +223,10 @@ function App() {
         <AssetTable list={twAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
 
-      {/* 存款與負債 */}
+      {/* 存款與現金 */}
       <div style={{ marginBottom: '12px' }}>
         <div onClick={() => setShowOther(!showOther)} style={{ background: 'rgba(255,255,255,0.8)', padding: '18px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', alignItems:'center', borderLeft: '6px solid #3b82f6', cursor: 'pointer' }}>
-          <b style={{ fontSize: '16px' }}>🏦 存款資產 {showOther ? '▲' : '▼'}</b>
+          <b style={{ fontSize: '16px' }}>🏦 存款/現金資產 {showOther ? '▲' : '▼'}</b>
           <span style={{ color: '#1e293b', fontWeight: 'bold' }}>{Math.round(totalOtherAssets).toLocaleString()}</span>
         </div>
         {showOther && (
@@ -251,11 +241,30 @@ function App() {
         )}
       </div>
 
+      {/* 負債明細 - 這裡重新加回去了 */}
+      <div style={{ marginBottom: '40px' }}>
+        <div onClick={() => setShowDebt(!showDebt)} style={{ background: 'rgba(255,255,255,0.8)', padding: '18px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', alignItems:'center', borderLeft: '6px solid #94a3b8', cursor: 'pointer' }}>
+          <b style={{ fontSize: '16px' }}>💸 負債明細 {showDebt ? '▲' : '▼'}</b>
+          <span style={{ color: '#ef4444', fontWeight: 'bold' }}>-{Math.round(totalDebt).toLocaleString()}</span>
+        </div>
+        {showDebt && (
+          <div style={{ background: 'rgba(255,255,255,0.9)', marginTop: '6px', borderRadius: '16px', overflow: 'hidden' }}>
+            {liabilities.map(item => (
+              <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                <span>{item.name}</span>
+                <span style={{ color: '#ef4444', fontWeight: 'bold' }}>-{Math.round(item.amount).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {showAdmin && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
           <div style={{ background: '#fff', padding: '24px', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}><h3>⚙️ 設定</h3><button onClick={() => setShowAdmin(false)}>✕</button></div>
-            <p style={{ fontWeight: 'bold', color: '#3b82f6' }}>📈 股票</p>
+            
+            <p style={{ fontWeight: 'bold', color: '#3b82f6' }}>📈 股票 (代號/股數/總成本)</p>
             {assets.map(item => (
               <div key={item.id} style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
                 <input style={{ flex: 1.2, padding: '10px' }} value={item.symbol} onChange={e => setAssets(assets.map(a => a.id === item.id ? {...a, symbol: e.target.value.toUpperCase()} : a))} />
@@ -265,7 +274,28 @@ function App() {
               </div>
             ))}
             <button onClick={() => setAssets([...assets, { id: Date.now(), symbol: '', shares: 0, totalCost: 0 }])} style={{ width: '100%', padding: '10px', marginBottom: '15px' }}>+ 新增股票</button>
-            <button onClick={() => setShowAdmin(false)} style={{ width: '100%', padding: '15px', background: '#1e293b', color: '#fff', borderRadius: '10px' }}>儲存</button>
+
+            <p style={{ fontWeight: 'bold', color: '#10b981' }}>🏦 存款明細</p>
+            {otherAssets.map(item => (
+              <div key={item.id} style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                <input style={{ flex: 2, padding: '10px' }} value={item.name} onChange={e => setOtherAssets(otherAssets.map(o => o.id === item.id ? {...o, name: e.target.value} : o))} />
+                <input style={{ flex: 1, padding: '10px' }} type="number" value={item.amount} onChange={e => setOtherAssets(otherAssets.map(o => o.id === item.id ? {...o, amount: parseFloat(e.target.value)} : o))} />
+                <button onClick={() => setOtherAssets(otherAssets.filter(o => o.id !== item.id))}>✕</button>
+              </div>
+            ))}
+            <button onClick={() => setOtherAssets([...otherAssets, { id: Date.now(), name: '', amount: 0 }])} style={{ width: '100%', padding: '10px', marginBottom: '15px' }}>+ 新增存款</button>
+
+            <p style={{ fontWeight: 'bold', color: '#ef4444' }}>💸 負債明細</p>
+            {liabilities.map(item => (
+              <div key={item.id} style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                <input style={{ flex: 2, padding: '10px' }} value={item.name} onChange={e => setLiabilities(liabilities.map(l => l.id === item.id ? {...l, name: e.target.value} : l))} />
+                <input style={{ flex: 1, padding: '10px' }} type="number" value={item.amount} onChange={e => setLiabilities(liabilities.map(l => l.id === item.id ? {...l, amount: parseFloat(e.target.value)} : l))} />
+                <button onClick={() => setLiabilities(liabilities.filter(l => l.id !== item.id))}>✕</button>
+              </div>
+            ))}
+            <button onClick={() => setLiabilities([...liabilities, { id: Date.now(), name: '', amount: 0 }])} style={{ width: '100%', padding: '10px', marginBottom: '15px' }}>+ 新增負債</button>
+
+            <button onClick={() => setShowAdmin(false)} style={{ width: '100%', padding: '15px', background: '#1e293b', color: '#fff', borderRadius: '10px', fontWeight: 'bold' }}>儲存並關閉</button>
           </div>
         </div>
       )}
