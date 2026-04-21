@@ -132,9 +132,9 @@ function App() {
   const usTotal = getSum(usAssets);
   const twTotal = getSum(twAssets);
 
-  // 淨資產 = (美股+台股+存款) - 負債
+  // 總資產 = 台股 + 美股 + 存款 (不扣負債)
   const grandTotal = { 
-    mv: (usTotal.mv + twTotal.mv + totalOtherAssets) - totalDebt,
+    mv: usTotal.mv + twTotal.mv + totalOtherAssets,
     today: usTotal.today + twTotal.today, 
     total: usTotal.total + twTotal.total,
     percent: (usTotal.cost + twTotal.cost) > 0 ? ((usTotal.total + twTotal.total) / (usTotal.cost + twTotal.cost)) * 100 : 0
@@ -142,7 +142,7 @@ function App() {
 
   const chartData = useMemo(() => {
     if (!history || history.length < 2) return null;
-    const combinedHistory = history.map(h => ({ ...h, totalVal: (h.val + totalOtherAssets) - totalDebt }));
+    const combinedHistory = history.map(h => ({ ...h, totalVal: h.val + totalOtherAssets }));
     const vals = combinedHistory.map(d => d.totalVal);
     const minV = Math.floor(Math.min(...vals) / 10000) * 10000;
     const maxV = Math.ceil(Math.max(...vals) / 10000) * 10000;
@@ -155,7 +155,7 @@ function App() {
       return `${x},${y}`;
     }).join(' ');
     return { points, yTicks, minV, maxV, vRange };
-  }, [history, totalOtherAssets, totalDebt]);
+  }, [history, totalOtherAssets]);
 
   const getValueColor = (val) => (val >= 0.01 ? '#ef4444' : val <= -0.01 ? '#22c55e' : '#64748b');
 
@@ -176,7 +176,7 @@ function App() {
       {/* 總覽卡片 */}
       <div style={{ background: 'rgba(30, 41, 59, 0.95)', backdropFilter: 'blur(10px)', color: '#fff', padding: '25px', borderRadius: '24px', marginBottom: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}>
         <div style={{ borderRight: '1px solid rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
-          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>淨資產 (資產-負債)</div>
+          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>總資產 </div>
           <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{Math.round(grandTotal.mv).toLocaleString()}</div>
         </div>
         <div style={{ textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
@@ -198,7 +198,7 @@ function App() {
 
       {/* 趨勢圖 */}
       <div style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(10px)', padding: '20px 16px', borderRadius: '24px', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.3)' }}>
-        <b style={{ fontSize: '16px', color: '#1e293b', display:'block', marginBottom:'16px' }}>📊 淨資產趨勢</b>
+        <b style={{ fontSize: '16px', color: '#1e293b', display:'block', marginBottom:'16px' }}>📊 總資產趨勢</b>
         <div style={{ height: '180px', width: '100%', position: 'relative', paddingLeft: '45px', boxSizing: 'border-box' }}>
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
             {chartData?.yTicks.map(tick => {
@@ -223,7 +223,6 @@ function App() {
         <AssetTable list={twAssets} calc={calculateAsset} getValColor={getValueColor} todayMode={todayMode} setTodayMode={setTodayMode} priceMode={priceMode} setPriceMode={setPriceMode} />
       </MobileSection>
 
-      {/* 存款與現金 */}
       <div style={{ marginBottom: '12px' }}>
         <div onClick={() => setShowOther(!showOther)} style={{ background: 'rgba(255,255,255,0.8)', padding: '18px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', alignItems:'center', borderLeft: '6px solid #3b82f6', cursor: 'pointer' }}>
           <b style={{ fontSize: '16px' }}>🏦 存款/現金資產 {showOther ? '▲' : '▼'}</b>
@@ -241,7 +240,6 @@ function App() {
         )}
       </div>
 
-      {/* 負債明細 - 這裡重新加回去了 */}
       <div style={{ marginBottom: '40px' }}>
         <div onClick={() => setShowDebt(!showDebt)} style={{ background: 'rgba(255,255,255,0.8)', padding: '18px 20px', borderRadius: '20px', display: 'flex', justifyContent: 'space-between', alignItems:'center', borderLeft: '6px solid #94a3b8', cursor: 'pointer' }}>
           <b style={{ fontSize: '16px' }}>💸 負債明細 {showDebt ? '▲' : '▼'}</b>
