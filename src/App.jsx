@@ -22,7 +22,6 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
 
-  // 關鍵調整：將初始值全部設為 false (預設折疊)
   const [showUS, setShowUS] = useState(false);
   const [showTW, setShowTW] = useState(false);
   const [showOther, setShowOther] = useState(false);
@@ -34,16 +33,28 @@ function App() {
   const assetsRef = useRef(assets);
   useEffect(() => { assetsRef.current = assets; }, [assets]);
 
-  // --- 數據抓取 ---
+  // --- 數據抓取：修正為直接讀取 B15 ---
   const fetchRateFromCloud = useCallback(async () => {
     try {
       const res = await fetch(`${CALC_CSV_URL}&t=${Date.now()}`);
       const text = await res.text();
-      const cleanText = text.replace(/,/g, ''); 
-      const matches = cleanText.match(/\d{2}\.\d+/g) || [];
-      const validRates = matches.map(Number).filter(n => n >= 28 && n <= 35);
-      if (validRates.length > 0) setExchangeRate(validRates[0]);
-    } catch (e) { console.error("匯率更新失敗"); }
+      const rows = text.split('\n');
+      
+      // B15 = 第 15 行 (index 14), 第 2 欄 (index 1)
+      if (rows.length >= 15) {
+        const columns = rows[14].split(',');
+        if (columns.length >= 2) {
+          // 清除引號與逗號
+          const rateStr = columns[1].replace(/[",]/g, '').trim();
+          const rateNum = parseFloat(rateStr);
+          if (!isNaN(rateNum) && rateNum > 0) {
+            setExchangeRate(rateNum);
+          }
+        }
+      }
+    } catch (e) { 
+      console.error("匯率讀取 B15 失敗", e); 
+    }
   }, [CALC_CSV_URL]);
 
   const fetchHistoryFromCloud = useCallback(async () => {
@@ -178,7 +189,7 @@ function App() {
       {/* 總覽卡片 */}
       <div style={{ background: 'rgba(30, 41, 59, 0.95)', backdropFilter: 'blur(10px)', color: '#fff', padding: '25px', borderRadius: '24px', marginBottom: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}>
         <div style={{ borderRight: '1px solid rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
-          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>總資產 </div>
+          <div style={{ fontSize: '12px', opacity: 0.6, marginBottom: '4px' }}>總資產</div>
           <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{Math.round(grandTotal.mv).toLocaleString()}</div>
         </div>
         <div style={{ textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
