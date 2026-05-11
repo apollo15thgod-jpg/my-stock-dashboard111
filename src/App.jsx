@@ -288,7 +288,7 @@ function MobileSection({ title, total, isOpen, onToggle, children, isDebt }) {
 function AssetTable({ list, calc, getColor, todayMode, setTodayMode }) {
   return (
     <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', margin: '0 -12px' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '20px', minWidth: '420px' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '17px', minWidth: '420px' }}>
         <thead>
           <tr style={{ color: '#8e8e93', borderBottom: '1px solid #f2f2f7' }}>
             {/* 代號通常建議靠左，維持 sticky 效果 */}
@@ -313,7 +313,7 @@ function AssetTable({ list, calc, getColor, todayMode, setTodayMode }) {
               <tr key={item.id} style={{ borderBottom: '1px solid #f2f2f7' }}>
                 {/* 內容格 - 代號靠左 */}
                 <td style={{ padding: '12px 12px', position: 'sticky', left: 0, background: '#fff', fontWeight: 'bold', textAlign: 'left' }}>
-                  {item.symbol}<br/><span style={{ fontSize: '15px', fontWeight: 'normal', opacity: 0.4 }}>{item.shares}股</span>
+                  {item.symbol}<br/><span style={{ fontSize: '12px', fontWeight: 'normal', opacity: 0.4 }}>{item.shares}股</span>
                 </td>
                 
                 {/* 內容格 - 數值全部置中 */}
