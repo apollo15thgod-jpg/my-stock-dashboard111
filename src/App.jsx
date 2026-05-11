@@ -302,7 +302,7 @@ function AssetTable({ list, calc, getColor, todayMode, setTodayMode }) {
             >
               今日
             </th>
-            <th style={{ padding: '8px 12px', textAlign: 'center' }}>總價(台)</th>
+            <th style={{ padding: '8px 12px', textAlign: 'center' }}>總價</th>
             <th style={{ padding: '8px 12px', textAlign: 'center' }}>累積</th>
           </tr>
         </thead>
